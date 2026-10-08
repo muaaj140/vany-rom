@@ -1,0 +1,82 @@
+name: Build LineageOS 15.1 VANY ROM
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Maximize Build Space Safely
+        uses: easimon/maximize-build-space@v5
+        with:
+          root-reserve-mb: 2048
+          swap-size-mb: 2048
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: Set up Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+            git gnupg gperf lib32ncurses5-dev lib32z1-dev libgl1-mesa-dev \
+            libxml2-utils xsltproc zip zlib1g-dev python2 python3
+          
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Sync Source and Build
+        run: |
+          mkdir -p ~/rom
+          cd ~/rom
+
+          git config --global user.name "BuildBot"
+          git config --global user.email "buildbot@example.com"
+
+          repo init -u https://github.com/LineageOS/android.git -b lineage-15.1 --git-lfs
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
+          source build/envsetup.sh
+          lunch lineage_vany-userdebug
+          make target-files-package otapackage -j$(nproc --all)
+
+          mkdir -p ~/output/
+          if [ -f out/target/product/vany/system.img ]; then
+            cp out/target/product/vany/system.img ~/output/vany-system.img
+          else
+            echo "system.img was not generated successfully." && exit 1
+          fi
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VANY-System-Image
+          path: ~/output/vany-system.img
+          retention-days: 7
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.0-${{ github.run_id }}
+          name: VANY ROM LineageOS 15.1 Build #${{ github.run_number }}
+          body: |
+            ## VANY Custom ROM Automated Build
+            - **Target OS:** Android 8.1 (LineageOS 15.1)
+            - **Build Status:** Success
+            - **Output File:** `vany-system.img`
+          files: |
+            ~/output/vany-system.img
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
